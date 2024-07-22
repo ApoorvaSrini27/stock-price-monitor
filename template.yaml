@@ -1,0 +1,111 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Stock Price Monitor
+
+Resources:
+  StockPriceMonitorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.12
+      Timeout: 600
+      MemorySize: 512
+      Events:
+        ScheduleEvent:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 hour)
+      Policies:
+        - CloudWatchPutMetricPolicy: {}
+        - CloudWatchLogsFullAccess
+        - Statement:
+            - Effect: Allow
+              Action:
+                - appconfig:GetConfiguration
+              Resource: '*'
+      Environment:
+        Variables:
+          LOG_GROUP_NAME: !Ref LogGroup
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: '/aws/lambda/StockPriceMonitor'
+      RetentionInDays: 14
+
+  LogStream:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref LogGroup
+      LogStreamName: 'errors'
+
+  AppConfigApplication:
+    Type: AWS::AppConfig::Application
+    Properties:
+      Name: StockMonitor
+      Description: "Application for Stock Monitor"
+
+  AppConfigEnvironment:
+    Type: AWS::AppConfig::Environment
+    Properties:
+      ApplicationId: !Ref AppConfigApplication
+      Name: Production
+      Description: "Production environment for Stock Monitor"
+
+  AppConfigConfigurationProfile:
+    Type: AWS::AppConfig::ConfigurationProfile
+    Properties:
+      ApplicationId: !Ref AppConfigApplication
+      Name: StocksList
+      LocationUri: "hosted"
+  AppConfigHostedConfigurationVersion:
+    Type: AWS::AppConfig::HostedConfigurationVersion
+    Properties:
+      ApplicationId: !Ref AppConfigApplication
+      ConfigurationProfileId: !Ref AppConfigConfigurationProfile
+      Content: '["KAYNES", "RELIANCE", "TCS", "INFY"]'
+      ContentType: "application/json"
+    
+  AppConfigDeployment:
+    Type: AWS::AppConfig::Deployment
+    Properties:
+      ApplicationId: !Ref AppConfigApplication
+      ConfigurationProfileId: !Ref AppConfigConfigurationProfile
+      ConfigurationVersion: !Ref AppConfigHostedConfigurationVersion
+      DeploymentStrategyId: "AppConfig.AllAtOnce"
+      EnvironmentId: !Ref AppConfigEnvironment
+  
+  CloudWatchAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: 'StockPriceMonitorErrors'
+      AlarmDescription: 'Alarm when there are errors in the Lambda function'
+      MetricName: 'Errors'
+      Namespace: 'AWS/Lambda'
+      Statistic: 'Sum'
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold'
+      Dimensions:
+        - Name: 'FunctionName'
+          Value: !Ref StockPriceMonitorFunction
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: 'StockPriceMonitorErrors'
+      
+Outputs:
+  StockPriceMonitorFunction:
+    Description: "Stock Price Monitor Lambda Function ARN"
+    Value: !GetAtt StockPriceMonitorFunction.Arn
+  LogGroupName:
+    Description: "CloudWatch Log Group Name"  
+    Value: !Ref LogGroup
+  AlarmTopicArn:
+    Description: "SNS Topic ARN for Alarms"
+    Value: !Ref AlarmTopic
